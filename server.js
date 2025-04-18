@@ -7,7 +7,7 @@ const rateLimit = require('express-rate-limit');
 const app = express();
 
 // Configuration
-const API_BASE = '/unofficialkym/api/v1';
+const API_BASE = '/unofficialkymapi/api/v1';
 const CACHE_DURATION = '24 hours';
 const PORT = process.env.PORT || 3000;
 
@@ -16,14 +16,15 @@ app.use(cors());
 app.use(express.json());
 app.use(apicache.middleware(CACHE_DURATION));
 
-// Rate limiting
+// Rate Limiting
 app.use(rateLimit({
   windowMs: 15 * 60 * 1000,
   max: 100,
-  message: 'Too many requests, please try later'
+  standardHeaders: true,
+  legacyHeaders: false
 }));
 
-// Randomized User-Agents
+// Randomized User Agents
 const userAgents = [
 "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",  
 "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:109.0) Gecko/20100101 Firefox/118.0",  
@@ -48,28 +49,21 @@ const userAgents = [
 ];
 
 const axiosInstance = axios.create({
-  headers: { 
+  headers: {
     'User-Agent': userAgents[Math.floor(Math.random() * userAgents.length)]
   }
 });
 
-// Enhanced parser with fallbacks
+// Meme Data Parser
 const parseMemeDetails = ($) => ({
-  name: $('h1').text().trim() || 'Unknown Meme',
-  about: $('#entry').text().trim() || null,
-  origin: $('#origin').text().trim() || null,
-  spread: $('#spread').text().trim() || null,
-  image: $('.meme-details img.photo').attr('src') || null,
-  status: $('dd.status').text().trim() || 'Unverified',
+  name: $('h1').text().trim(),
+  about: $('#entry').text().trim(),
+  origin: $('#origin').text().trim(),
+  spread: $('#spread').text().trim(),
+  image: $('.meme-details img.photo').attr('src'),
+  status: $('dd.status').text().trim(),
   views: parseInt($('dd.views').text().replace(/\D/g, '')) || 0,
   tags: $('.tags a').map((i, el) => $(el).text().trim()).get(),
-  impact: {
-    recognition: $('.recognition-level').text().trim() || null,
-    derivatives: $('.derivatives li').map((i, el) => ({
-      name: $(el).text().trim(),
-      url: $(el).find('a').attr('href')
-    })).get()
-  },
   references: {
     videos: $('.entry-video iframe').map((i, el) => $(el).attr('src')).get(),
     links: $('.reference-list li a').map((i, el) => ({
@@ -79,70 +73,79 @@ const parseMemeDetails = ($) => ({
   }
 });
 
-// Unified endpoint
-app.get(`${API_BASE}/memes/:query`, async (req, res) => {
+// 1. Direct Meme Endpoint
+app.get(`${API_BASE}/memes/:meme`, async (req, res) => {
   try {
-    const { query } = req.params;
-    const page = req.query.page || 1;
-
-    // Attempt direct meme match
-    try {
-      const { data } = await axiosInstance.get(
-        `https://knowyourmeme.com/memes/${encodeURIComponent(query)}`
-      );
-      const $ = cheerio.load(data);
-      return res.json({
-        status: 'success',
-        type: 'direct',
-        data: parseMemeDetails($)
-      });
-    } catch {
-      // Fallback to search
-      const { data } = await axiosInstance.get(
-        `https://knowyourmeme.com/search?q=${encodeURIComponent(query)}&page=${page}`
-      );
-      const $ = cheerio.load(data);
-
-      const results = $('.entry-grid-body tr').map((i, el) => ({
-        name: $(el).find('.subject').text().trim(),
-        url: $(el).find('a').attr('href'),
-        image: $(el).find('img').attr('src') || null,
-        description: $(el).find('.meta').text().trim(),
-        views: parseInt($(el).find('.views').text().replace(/\D/g, '')) || 0
-      })).get();
-
-      const pagination = {
-        current_page: parseInt(page),
-        total_pages: parseInt($('.pagination li').last().prev().text() || 1),
-        total_results: parseInt($('.counter').text().match(/\d+/)?.[0] || 0)
-      };
-
-      return res.json({
-        status: 'success',
-        type: 'search',
-        data: { results, pagination }
-      });
-    }
+    const { data } = await axiosInstance.get(
+      `https://knowyourmeme.com/memes/${encodeURIComponent(req.params.meme)}`
+    );
+    const $ = cheerio.load(data);
+    
+    res.json({
+      status: 'success',
+      data: parseMemeDetails($)
+    });
   } catch (error) {
-    res.status(error.response?.status || 500).json({
+    res.status(404).json({
       status: 'error',
-      message: error.response?.status === 404 ? 
-        'Meme not found' : 'Internal server error'
+      message: 'Meme not found'
     });
   }
 });
 
-// Cache management
-apicache.clear();
-setInterval(apicache.clear, 24 * 60 * 60 * 1000);
+// 2. Search Endpoint
+app.get(`${API_BASE}/memes/search`, async (req, res) => {
+  try {
+    const query = req.query.query;
+    const page = req.query.pagenum || 1;
 
+    if (!query) return res.status(400).json({ 
+      status: 'error', 
+      message: 'Missing search query' 
+    });
+
+    const { data } = await axiosInstance.get(
+      `https://knowyourmeme.com/search?q=${encodeURIComponent(query)}&page=${page}`
+    );
+    const $ = cheerio.load(data);
+
+    const results = $('.entry-grid-body tr').map((i, el) => ({
+      name: $(el).find('.subject').text().trim(),
+      url: $(el).find('a').attr('href'),
+      image: $(el).find('img').attr('src'),
+      description: $(el).find('.meta').text().trim(),
+      views: parseInt($(el).find('.views').text().replace(/\D/g, '')) || 0
+    })).get();
+
+    const pagination = {
+      current_page: Number(page),
+      total_pages: parseInt($('.pagination li').last().prev().text() || 1),
+      total_results: parseInt($('.counter').text().match(/\d+/)?.[0] || 0)
+    };
+
+    res.json({
+      status: 'success',
+      data: { results, pagination }
+    });
+  } catch (error) {
+    res.status(500).json({
+      status: 'error',
+      message: 'Search failed'
+    });
+  }
+});
+
+// Cache Management
+setInterval(apicache.clear, 24 * 60 * 60 * 1000);
 app.use((req, res, next) => {
-  res.set('Cache-Control', req.query['no-cache'] ? 
+  res.set('Cache-Control', req.query.nocache ? 
     'no-store' : 'public, max-age=86400'
   );
   next();
 });
 
 app.listen(PORT, () => 
-  console.log(`API running on port ${PORT} | Cache reset daily`)
+  console.log(`API running on port ${PORT} | Endpoints:
+  • /memes/{meme}
+  • /memes/search?query={term}&pagenum={page}`)
 );
