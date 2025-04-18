@@ -111,8 +111,7 @@ Meme Search: GET /unofficialkym/api/v1/memes/[search-term]?page=[number]
   ```http
   X-RateLimit-Limit: 100
   X-RateLimit-Remaining: 99
-  X-RateLimit-Reset: 2023-12-25T00:00:00Z
- ```
+  X-RateLimit-Reset: 2023-12-25T00:00:00Z```
 
 ## Response Headers ℹ️
 - `X-Data-Source: KnowYourMeme Public Content`
